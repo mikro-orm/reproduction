@@ -6,4 +6,6 @@ module.exports = {
       isolatedModules: true,
     }],
   },
+  "globalSetup": "<rootDir>/globalSetup.ts",
+  "globalTeardown": "<rootDir>/globalTeardown.ts"
 };
