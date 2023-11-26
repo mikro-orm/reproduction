@@ -1,0 +1,7 @@
+export enum Status {
+  WAITING = "WAITING",
+  RUNNING = "RUNNING",
+  SUCCEEDED = "SUCCEEDED",
+  FAILED = "FAILED",
+  UNKNOWN = "UNKNOWN",
+}
