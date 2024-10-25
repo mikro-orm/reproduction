@@ -2,6 +2,7 @@ import {
   Collection,
   DecimalType,
   defineConfig,
+  Embeddable,
   Embedded,
   Entity,
   ManyToOne,
@@ -10,7 +11,32 @@ import {
   PrimaryKey,
   Property,
 } from "@mikro-orm/postgresql";
-import { Money } from "./money.embeddable";
+
+export class CustomDecimalType extends DecimalType {
+  compareValues(a: string, b: string): boolean {
+    return (
+      parseFloat(String(a)).toFixed(this.prop?.scale ?? 2) ===
+      parseFloat(String(b)).toFixed(this.prop?.scale ?? 2)
+    );
+  }
+}
+
+@Embeddable()
+export class Money {
+  @Property({
+    type: new CustomDecimalType("number"),
+    scale: 2,
+  })
+  amount: number;
+
+  @Property({ length: 3 })
+  currencyCode: string;
+
+  constructor(amount: number, currencyCode: string) {
+    this.amount = amount;
+    this.currencyCode = currencyCode;
+  }
+}
 
 @Entity({ tableName: "test_user" })
 class User {
@@ -57,7 +83,7 @@ class Book {
   name: string;
 
   @Property({
-    type: new DecimalType("number"),
+    type: new CustomDecimalType("number"),
     runtimeType: "number",
     scale: 2,
   })
@@ -145,7 +171,6 @@ describe("should not update entities just for find them inside a transaction", (
     expect(unwantedUpdate).toBeFalsy();
   });
 
-
   test("should not update book entity when findOne Book when decimals are zeros", async () => {
     await orm.em.transactional(async () => {
       const user = orm.em.create(User, {
@@ -154,9 +179,7 @@ describe("should not update entities just for find them inside a transaction", (
         email: "foo",
         decimal: 2,
       });
-      user.books.add(
-        new Book(5, "book-1", 11.00, new Money(10.00, "USD"), user)
-      );
+      user.books.add(new Book(5, "book-1", 11.0, new Money(10.0, "USD"), user));
     });
 
     orm.em.clear();
@@ -168,9 +191,7 @@ describe("should not update entities just for find them inside a transaction", (
     });
 
     const unwantedUpdate = loggerMessages.find((message: string) => {
-      return /(update|(update \"test_books\" set \"decimal_amount\" = 11, \"price_amount\" = 10 where \"id\" = 1))/gi.test(
-        message
-      );
+      return /(update)/gi.test(message);
     });
 
     expect(unwantedUpdate).toBeFalsy();
@@ -184,9 +205,7 @@ describe("should not update entities just for find them inside a transaction", (
         email: "foo",
         decimal: 2,
       });
-      user.books.add(
-        new Book(6, "book-1", 11, new Money(10, "USD"), user)
-      );
+      user.books.add(new Book(6, "book-1", 11, new Money(10, "USD"), user));
     });
 
     orm.em.clear();
@@ -204,6 +223,50 @@ describe("should not update entities just for find them inside a transaction", (
     });
 
     expect(unwantedUpdate).toBeFalsy();
+  });
+
+  test("should not update book entity when findOne Book when decimals have specific decimals making JS round badly", async () => {
+    await orm.em.transactional(async () => {
+      const user = orm.em.create(User, {
+        id: 6,
+        name: "Foo",
+        email: "foo",
+        decimal: 2,
+      });
+      user.books.add(
+        new Book(6, "book-1", 185.385, new Money(185.385, "USD"), user)
+      );
+    });
+
+    orm.em.clear();
+
+    const bookResult = await orm.em.transactional(async () => {
+      return await orm.em.findOneOrFail(Book, {
+        id: 6,
+      });
+    });
+
+    const unwantedUpdate = loggerMessages.find((message: string) => {
+      return /(update)/gi.test(message);
+    });
+
+    expect(unwantedUpdate).toBeFalsy();
+
+    orm.em.clear();
+
+    await orm.em.transactional(async (em) => {
+      em.merge(bookResult);
+      expect(bookResult.price.amount).toBe(185.39); // Database rounds "185.385" to "185.39"
+      bookResult.price = new Money(185.385, "USD"); // I store again the initial price value "185.385"
+    });
+
+    const anotherUnwantedUpdate = loggerMessages.find((message: string) => {
+      return /(update \"test_books\" set \"price_amount\" = 185.385 where \"id\" = 6)/gi.test(
+        message
+      );
+    });
+
+    expect(anotherUnwantedUpdate).toBeFalsy();
   });
 
   test("should not update book entity when findOne a user WITH books", async () => {
