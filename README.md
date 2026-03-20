@@ -1,6 +1,6 @@
 # MikroORM reproduction example
 
-This repository serves as a base reproduction example, it contains basic setup with MikroORM 6 with SQLite driver and jest. This is what the main repository is using, and therefore allows for a simple integration to the codebase.
+This repository serves as a base reproduction example, it contains basic setup with MikroORM 7 with SQLite driver and vitest. This is what the main repository is using, and therefore allows for a simple integration to the codebase.
 
 ## Few hints for creating your own reproductions
 
