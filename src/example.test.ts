@@ -1,43 +1,31 @@
-import { Cascade, defineEntity, MikroORM, p } from '@mikro-orm/postgresql';
+import { defineEntity, EventArgs, EventSubscriber, MikroORM, p, wrap } from '@mikro-orm/postgresql';
 
-const MediaSetSchema = defineEntity({
-  name: 'MediaSet',
+const ItemSchema = defineEntity({
+  name: 'Item',
   properties: {
     id: p.integer().primary(),
-    medias: () => p.oneToMany(Media).mappedBy('set'),
-  },
-});
-class MediaSet extends MediaSetSchema.class {}
-MediaSetSchema.setClass(MediaSet);
-
-const MediaSchema = defineEntity({
-  name: 'Media',
-  properties: {
-    id: p.integer().primary(),
+    name: p.text(),
     url: p.text(),
-    set: () => p.manyToOne(MediaSet).nullable(),
   },
 });
-class Media extends MediaSchema.class {}
-MediaSchema.setClass(Media);
-
-const MediaOwnerSchema = defineEntity({
-  name: 'MediaOwner',
-  properties: {
-    id: p.integer().primary(),
-    imageList: () => p.oneToOne(MediaSet).cascade(Cascade.ALL),
-  },
-});
-class MediaOwner extends MediaOwnerSchema.class {}
-MediaOwnerSchema.setClass(MediaOwner);
+export class TestSubscriber implements EventSubscriber {
+  async beforeUpdate(
+    args: EventArgs<any>,
+  ): Promise<void> {
+    const loadedEntity = await args.em.findOne(args.meta.class, args.entity);
+    console.log(loadedEntity)
+  }
+}
+class Item extends ItemSchema.class {}
+ItemSchema.setClass(Item);
 
 let orm: Awaited<ReturnType<typeof MikroORM.init>>;
 
 beforeAll(async () => {
   orm = await MikroORM.init({
-    clientUrl: 'postgresql://neondb_owner:npg_kOnEL1Wg3cCQ@ep-odd-firefly-a1rh5omt-pooler.ap-southeast-1.aws.neon.tech/mikro-orm-reproduction?sslmode=require&channel_binding=require',
-    entities: [Media, MediaSet, MediaOwner],
-    debug: ['query', 'query-params'],
+    clientUrl: 'postgresql://neondb_owner:npg_iz5afD0QpULJ@ep-odd-firefly-a1rh5omt-pooler.ap-southeast-1.aws.neon.tech/cicd-demo-test?sslmode=require&channel_binding=require',
+    entities: [Item],
+    subscribers: [TestSubscriber],
     driverOptions: {
       ssl: true
     }
@@ -51,39 +39,41 @@ afterAll(async () => {
   await orm.close(true);
 });
 
-test('deleting MediaOwner should set media.set to NULL', async () => {
+test(`subscriber update with loaded entity`, async () => {
   const em = orm.em.fork();
-
-  const media1 = em.create(Media, { url: '/m1' });
-  const media2 = em.create(Media, { url: '/m2' });
-  const mediaSet = em.create(MediaSet, { medias: [media1, media2] });
-  const owner = em.create(MediaOwner, { imageList: mediaSet });
-
+  const item = em.create(Item, {name: 'Name', url: 'any'})
   await em.flush();
-  em.clear();
 
-  // Delete the media owner (should cascade delete MediaSet, and set media.set to NULL)
-  const em2 = em.fork();
-  const fetchedOwner = await em2.findOneOrFail(MediaOwner, owner.id, {
-    populate: ['imageList', 'imageList.medias'],
-  });
-  em2.remove(fetchedOwner);
-  await em2.flush();
-  em2.clear();
+  wrap(item).assign({
+    name: 'New name'
+  })
+  // before update will run and fetch a findOne
+  // but the item is already loaded so the
+  // findOne inside subscriber also return 'New name'
+  await em.flush();
 
-  // Verify media.set is NULL
-  const em3 = em.fork();
-  const verifyMedia1 = await em3.findOneOrFail(Media, media1.id);
-  const verifyMedia2 = await em3.findOneOrFail(Media, media2.id);
+  const fetchItemAgain = await em.findOneOrFail(Item, item)
+  expect(fetchItemAgain.name).toBe('New name')
+})
 
-  console.log('media1.set:', verifyMedia1.set);
-  console.log('media1.set === null:', verifyMedia1.set === null);
-  console.log('media1.set === undefined:', verifyMedia1.set === undefined);
+test(`subscriber update with reference`, async () => {
+  const em = orm.em.fork();
+  const item = em.create(Item, {name: 'Name', url: 'any'})
+  await em.flush();
 
-  console.log('media2.set:', verifyMedia2.set);
-  console.log('media2.set === null:', verifyMedia2.set === null);
-  console.log('media2.set === undefined:', verifyMedia2.set === undefined);
+  await em.clear()
 
-  expect(verifyMedia1.set).toBeNull();
-  expect(verifyMedia2.set).toBeNull();
-});
+  const reference = em.getReference(Item, item.id)
+  wrap(reference).assign({
+    name: 'New name'
+  })
+  // before update will run and fetch a findOne
+  // but the item is never loaded so
+  // findOne inside subscriber still has 'Name'
+  // and now it overwrites on the reference assign
+  // an update never happen
+  await em.flush();
+
+  const fetchItemAgain = await em.findOneOrFail(Item, item)
+  expect(fetchItemAgain.name).toBe('New name')
+})
