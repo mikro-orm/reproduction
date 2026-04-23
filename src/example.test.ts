@@ -1,77 +1,87 @@
 import { defineEntity, MikroORM, p } from '@mikro-orm/postgresql';
 import 'reflect-metadata';
 
-export const ItemSchema = defineEntity({
-  name: 'Item',
-  indexes: [
-    {
-      name: 'item_deleted_at_idx',
-      expression: (columns, table) =>
-        `CREATE INDEX item_deleted_at_idx ON ${table.qualifiedName} (${columns.code}) WHERE ${columns.deletedAt} IS NULL`,
-    },
-  ],
+export const OrderSchema = defineEntity({
+  name: 'Order',
   properties: {
     id: p.integer().primary(),
-    code: p.text(),
-    deletedAt: p.datetime().nullable()
+    name: p.text(),
+    item: () => p.oneToOne(OrderItem),
+    note: () => p.oneToOne(OrderNote),
   }
 })
-export class Item extends ItemSchema.class {}
-ItemSchema.setClass(Item);
+export class Order extends OrderSchema.class {}
+OrderSchema.setClass(Order);
 
-export const UserSchema = defineEntity({
-  name: 'User',
-  schema: 'auth',
-  indexes: [
-    {
-      name: 'user_deleted_at_idx',
-      expression: (columns, table) =>
-        `CREATE INDEX user_deleted_at_idx ON ${table.qualifiedName} (${columns.code}) WHERE ${columns.deletedAt} IS NULL`,
-    },
-  ],
+export const OrderItemSchema = defineEntity({
+  name: 'OrderItem',
+  schema: 'inventory',
   properties: {
     id: p.integer().primary(),
-    code: p.text(),
-    deletedAt: p.datetime().nullable()
+    name: p.text(),
   }
 })
-export class User extends UserSchema.class {}
-UserSchema.setClass(User);
+export class OrderItem extends OrderItemSchema.class {}
+OrderItemSchema.setClass(OrderItem);
+
+export const OrderNoteSchema = defineEntity({
+  name: 'OrderNote',
+  schema: 'notes',
+  properties: {
+    id: p.integer().primary(),
+    name: p.text(),
+  }
+})
+export class OrderNote extends OrderNoteSchema.class {}
+OrderNoteSchema.setClass(OrderNote);
 
 let orm: MikroORM;
 
 beforeAll(async () => {
   orm = await MikroORM.init({
     clientUrl: 'postgresql://neondb_owner:npg_TsDK7vCqH1ib@ep-odd-firefly-a1rh5omt-pooler.ap-southeast-1.aws.neon.tech/mikro-orm-reproduction?sslmode=require&channel_binding=require',
-    entities: [Item, User],
+    entities: [Order, OrderItem, OrderNote],
     debug: ['query', 'query-params'],
-    allowGlobalContext: true, // only for testing
+    allowGlobalContext: true,
     driverOptions: {
       ssl: { rejectUnauthorized: false },
     },
   });
   await orm.schema.refresh();
+
+  orm.em.create(Order, { id: 1, name: 'Order #1', item: {
+    id: 1, name: 'Item #1'
+  }, note: {
+    id: 1, name: 'Note #1'
+  } });
+  await orm.em.flush();
+  orm.em.clear();
 });
 
 afterAll(async () => {
   await orm.close(true);
 });
 
-test('item - custom index changes on public schema', async () => {
-  const meta = orm.getMetadata().get(Item);
-  meta.indexes = []
+test('find order with fields returns order and item data correctly', async () => {
+  const order = await orm.em.findOneOrFail(Order, { id: 1 }, {
+    fields: ['id', 'name', 'item.id', 'item.name'],
+  }) as Order;
 
-  const updateSchema = await orm.schema.getUpdateSchemaSQL();
-  console.log(updateSchema, 'Update schema for Item');
-  await orm.schema.update()
+  expect(order.id).toBe(1);
+  expect(order.name).toBe('Order #1');
+  expect(order.item.id).toBe(1);
+  expect(order.item.name).toBe('Item #1');
 });
 
+test('find order with fields and populate note fails to return item data', async () => {
+  orm.em.clear()
+  const order = await orm.em.findOneOrFail(Order, { id: 1 }, {
+    fields: ['id', 'name', 'item.id', 'item.name'],
+    populate: ['note'],
+  }) as Order;
 
-test('user - custom index changes on non-public schema', async () => {
-  const meta = orm.getMetadata().get(User);
-  meta.indexes = []
-
-  const updateSchema = await orm.schema.getUpdateSchemaSQL();
-  console.log(updateSchema, 'Update schema for User');
-  await orm.schema.update()
+  expect(order.id).toBe(1);
+  expect(order.name).toBe('Order #1');
+  expect(order.item.id).toBe(1);
+  expect(order.item.name).toBe('Item #1');
 });
