@@ -3,4 +3,3 @@ node_modules
 sqlite.db
 dist
 temp
-package-lock.json
